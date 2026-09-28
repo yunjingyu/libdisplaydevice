@@ -29,6 +29,43 @@ namespace {
 
   class WinDisplayDeviceTopologyMocked: public BaseTest {
   public:
+    /**
+     * @brief Confirm an actual blackout with two successful queries returning no active paths.
+     * @param sequence Keeps the expectations ordered with surrounding operations.
+     */
+    void expectConfirmedEmptyTopology(InSequence & /* sequence */) const {
+      EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::Active))
+        .Times(2)
+        .WillRepeatedly(Return(ut_consts::PAM_EMPTY))
+        .RetiresOnSaturation();
+    }
+
+    /**
+     * @brief Provide available inactive output paths for reconstruction by the real display device.
+     * @param sequence Keeps the expectations ordered with surrounding operations.
+     */
+    void expectAvailableInactivePaths(InSequence & /* sequence */) const {
+      auto data {*ut_consts::PAM_3_ACTIVE};
+      for (auto &path : data.m_paths) {
+        path.flags &= ~DISPLAYCONFIG_PATH_ACTIVE;
+      }
+      EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::All))
+        .WillOnce(Return(data))
+        .RetiresOnSaturation();
+      expectPathMetadataLookups(m_layer, 3);
+    }
+
+    /**
+     * @brief Read back the first output as active after a recovery attempt.
+     * @param sequence Keeps the expectations ordered with surrounding operations.
+     */
+    void expectFirstOutputActive(InSequence & /* sequence */) const {
+      EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::Active))
+        .WillOnce(Return(display_device::PathAndModeData {{ut_consts::PAM_3_ACTIVE->m_paths.at(0)}, {ut_consts::PAM_3_ACTIVE->m_modes.at(0)}}))
+        .RetiresOnSaturation();
+      expectPathMetadataLookups(m_layer, 1);
+    }
+
     void setupExpectCallFor3ActivePathsAndModes(const display_device::QueryType query_type, InSequence & /* To ensure that sequence is created outside this scope */) const {
       EXPECT_CALL(*m_layer, queryDisplayConfig(query_type))
         .Times(1)
@@ -296,8 +333,123 @@ TEST_F_S_MOCKED(SetCurrentTopology, InvalidTopologyProvided) {
 
 TEST_F_S_MOCKED(SetCurrentTopology, FailedToGetCurrentTopology) {
   EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::Active))
-    .Times(1)
+    .Times(2)
+    .WillRepeatedly(Return(ut_consts::PAM_NULL));
+
+  EXPECT_FALSE(m_win_dd.setTopology({{"DeviceId1"}}));
+}
+
+TEST_F_S_MOCKED(SetCurrentTopology, EmptyCurrentTopologyRecoversFromAvailableInactivePaths) {
+  InSequence sequence;
+  expectConfirmedEmptyTopology(sequence);
+  expectAvailableInactivePaths(sequence);
+  const UINT32 flags {SDC_APPLY | SDC_TOPOLOGY_SUPPLIED | SDC_ALLOW_PATH_ORDER_CHANGES | SDC_VIRTUAL_MODE_AWARE};
+  EXPECT_CALL(*m_layer, setDisplayConfig(getExpectedPathToBeSet(), std::vector<DISPLAYCONFIG_MODE_INFO> {}, flags))
+    .WillOnce(Return(ERROR_SUCCESS));
+  expectFirstOutputActive(sequence);
+
+  EXPECT_TRUE(m_win_dd.setTopology({{"DeviceId1"}}));
+}
+
+TEST_F_S_MOCKED(SetCurrentTopology, EmptyRecoveryAbortsWhenConfirmationQueryFails) {
+  InSequence sequence;
+  EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::Active))
+    .WillOnce(Return(ut_consts::PAM_EMPTY))
+    .RetiresOnSaturation();
+  EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::Active))
+    .WillOnce(Return(ut_consts::PAM_NULL))
+    .RetiresOnSaturation();
+
+  EXPECT_FALSE(m_win_dd.setTopology({{"DeviceId1"}}));
+}
+
+TEST_F_S_MOCKED(SetCurrentTopology, InvalidActiveMetadataDoesNotAuthorizeBlackoutRecovery) {
+  InSequence sequence;
+  EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::Active))
+    .WillOnce(Return(ut_consts::PAM_3_ACTIVE_WITH_INVALID_MODE_IDX))
+    .RetiresOnSaturation();
+  expectPathMetadataLookups(m_layer, 1);
+  EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::Active))
+    .WillOnce(Return(ut_consts::PAM_3_ACTIVE_WITH_INVALID_MODE_IDX))
+    .RetiresOnSaturation();
+
+  EXPECT_FALSE(m_win_dd.setTopology({{"DeviceId1"}}));
+}
+
+TEST_F_S_MOCKED(SetCurrentTopology, EmptyRecoveryRequiresAvailableTargetPaths) {
+  InSequence sequence;
+  expectConfirmedEmptyTopology(sequence);
+  expectAvailableInactivePaths(sequence);
+
+  EXPECT_FALSE(m_win_dd.setTopology({{"MissingDevice"}}));
+}
+
+TEST_F_S_MOCKED(SetCurrentTopology, EmptyRecoveryAbortsWhenAllPathsQueryFails) {
+  InSequence sequence;
+  expectConfirmedEmptyTopology(sequence);
+  EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::All))
     .WillOnce(Return(ut_consts::PAM_NULL));
+
+  EXPECT_FALSE(m_win_dd.setTopology({{"DeviceId1"}}));
+}
+
+TEST_F_S_MOCKED(SetCurrentTopology, EmptyRecoveryNeverRestoresAnEmptySnapshotAfterFailedReadback) {
+  InSequence sequence;
+  expectConfirmedEmptyTopology(sequence);
+  expectAvailableInactivePaths(sequence);
+  const UINT32 flags {SDC_APPLY | SDC_TOPOLOGY_SUPPLIED | SDC_ALLOW_PATH_ORDER_CHANGES | SDC_VIRTUAL_MODE_AWARE};
+  EXPECT_CALL(*m_layer, setDisplayConfig(getExpectedPathToBeSet(), std::vector<DISPLAYCONFIG_MODE_INFO> {}, flags))
+    .WillOnce(Return(ERROR_SUCCESS));
+  EXPECT_CALL(*m_layer, queryDisplayConfig(display_device::QueryType::Active))
+    .WillOnce(Return(ut_consts::PAM_EMPTY));
+
+  EXPECT_FALSE(m_win_dd.setTopology({{"DeviceId1"}}));
+}
+
+TEST_F_S_MOCKED(SetCurrentTopology, EmptyRecoveryKeepsPartialOutputsAndReportsFailure) {
+  InSequence sequence;
+  expectConfirmedEmptyTopology(sequence);
+  expectAvailableInactivePaths(sequence);
+  auto expected_paths {getExpectedPathToBeSet()};
+  auto second_path {ut_consts::PAM_3_ACTIVE->m_paths.at(1)};
+  display_device::win_utils::setCloneGroupId(second_path, 1);
+  display_device::win_utils::setSourceIndex(second_path, std::nullopt);
+  display_device::win_utils::setTargetIndex(second_path, std::nullopt);
+  display_device::win_utils::setDesktopIndex(second_path, std::nullopt);
+  display_device::win_utils::setActive(second_path);
+  expected_paths.push_back(second_path);
+  const UINT32 flags {SDC_APPLY | SDC_TOPOLOGY_SUPPLIED | SDC_ALLOW_PATH_ORDER_CHANGES | SDC_VIRTUAL_MODE_AWARE};
+  EXPECT_CALL(*m_layer, setDisplayConfig(expected_paths, std::vector<DISPLAYCONFIG_MODE_INFO> {}, flags))
+    .WillOnce(Return(ERROR_SUCCESS));
+  expectFirstOutputActive(sequence);
+
+  EXPECT_FALSE(m_win_dd.setTopology({{"DeviceId1"}, {"DeviceId2"}}));
+}
+
+TEST_F_S_MOCKED(SetCurrentTopology, ActiveSnapshotLostBeforeAllPathsQueryIsNotUsedForRollback) {
+  InSequence sequence;
+  setupExpectCallFor3ActivePathsAndModes(display_device::QueryType::Active, sequence);
+  expectAvailableInactivePaths(sequence);
+  const UINT32 flags {SDC_APPLY | SDC_TOPOLOGY_SUPPLIED | SDC_ALLOW_PATH_ORDER_CHANGES | SDC_VIRTUAL_MODE_AWARE};
+  EXPECT_CALL(*m_layer, setDisplayConfig(getExpectedPathToBeSet(), std::vector<DISPLAYCONFIG_MODE_INFO> {}, flags))
+    .WillOnce(Return(ERROR_SUCCESS));
+  setupExpectCallFor3ActivePathsAndModes(display_device::QueryType::Active, sequence);
+
+  EXPECT_FALSE(m_win_dd.setTopology({{"DeviceId1"}}));
+}
+
+TEST_F_S_MOCKED(SetCurrentTopology, RollbackFailureIsReported) {
+  InSequence sequence;
+  setupExpectCallFor3ActivePathsAndModes(display_device::QueryType::Active, sequence);
+  setupExpectCallFor3ActivePathsAndModes(display_device::QueryType::All, sequence);
+  const UINT32 apply_flags {SDC_APPLY | SDC_TOPOLOGY_SUPPLIED | SDC_ALLOW_PATH_ORDER_CHANGES | SDC_VIRTUAL_MODE_AWARE};
+  EXPECT_CALL(*m_layer, setDisplayConfig(getExpectedPathToBeSet(), std::vector<DISPLAYCONFIG_MODE_INFO> {}, apply_flags))
+    .WillOnce(Return(ERROR_SUCCESS));
+  setupExpectCallFor3ActivePathsAndModes(display_device::QueryType::Active, sequence);
+  const UINT32 rollback_flags {SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE | SDC_VIRTUAL_MODE_AWARE};
+  EXPECT_CALL(*m_layer, setDisplayConfig(ut_consts::PAM_3_ACTIVE->m_paths, ut_consts::PAM_3_ACTIVE->m_modes, rollback_flags))
+    .WillOnce(Return(ERROR_GEN_FAILURE));
+  EXPECT_CALL(*m_layer, getErrorString(ERROR_GEN_FAILURE)).WillOnce(Return("Rollback failed"));
 
   EXPECT_FALSE(m_win_dd.setTopology({{"DeviceId1"}}));
 }

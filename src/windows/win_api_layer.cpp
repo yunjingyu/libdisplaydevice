@@ -507,13 +507,7 @@ namespace display_device {
         return std::nullopt;
       }
 
-      paths.resize(path_count);
-      modes.resize(mode_count);
-      result = QueryDisplayConfig(flags, &path_count, paths.data(), &mode_count, modes.data(), nullptr);
-
-      // The function may have returned fewer paths/modes than estimated
-      paths.resize(path_count);
-      modes.resize(mode_count);
+      result = detail::queryDisplayConfigWithBuffers(flags, path_count, mode_count, paths, modes, QueryDisplayConfig);
 
       // It's possible that between the call to GetDisplayConfigBufferSizes and QueryDisplayConfig
       // that the display state changed, so loop on the case of ERROR_INSUFFICIENT_BUFFER.

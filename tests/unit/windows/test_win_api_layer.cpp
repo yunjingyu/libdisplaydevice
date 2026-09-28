@@ -1,4 +1,5 @@
 // local includes
+#include "display_device/windows/detail/display_config.h"
 #include "display_device/windows/win_api_layer.h"
 #include "fixtures/fixtures.h"
 
@@ -36,6 +37,57 @@ TEST_F_S(GetErrorString) {
   EXPECT_TRUE(testRegex(m_layer.getErrorString(ERROR_GEN_FAILURE), R"(\[code: ERROR_GEN_FAILURE, .+?\])"));
   EXPECT_TRUE(testRegex(m_layer.getErrorString(ERROR_SUCCESS), R"(\[code: ERROR_SUCCESS, .+?\])"));
   EXPECT_TRUE(testRegex(m_layer.getErrorString(ERROR_ACCOUNT_DISABLED), R"(\[code: )" + std::to_string(ERROR_ACCOUNT_DISABLED) + R"(, .+?\])"));
+}
+
+TEST(WinApiLayerQueryBuffers, EmptyQueryProvidesNonNullBuffersWithoutInventingPaths) {
+  std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+  std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+  const auto result {display_device::detail::queryDisplayConfigWithBuffers(QDC_ONLY_ACTIVE_PATHS, 0, 0, paths, modes, [](const auto flags, auto *path_count, auto *path_data, auto *mode_count, auto *mode_data, auto topology_id) {
+    EXPECT_EQ(flags, QDC_ONLY_ACTIVE_PATHS);
+    EXPECT_NE(path_data, nullptr);
+    EXPECT_NE(mode_data, nullptr);
+    EXPECT_GE(*path_count, 1u);
+    EXPECT_GE(*mode_count, 1u);
+    EXPECT_EQ(topology_id, nullptr);
+    *path_count = 0;
+    *mode_count = 0;
+    return ERROR_SUCCESS;
+  })};
+
+  EXPECT_EQ(result, ERROR_SUCCESS);
+  EXPECT_TRUE(paths.empty());
+  EXPECT_TRUE(modes.empty());
+}
+
+TEST(WinApiLayerQueryBuffers, InactivePathsDoNotRequireAvailableModes) {
+  std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+  std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+  const auto result {display_device::detail::queryDisplayConfigWithBuffers(QDC_ALL_PATHS, 2, 0, paths, modes, [](const auto flags, auto *path_count, auto *path_data, auto *mode_count, auto *mode_data, auto) {
+    EXPECT_EQ(flags, QDC_ALL_PATHS);
+    EXPECT_EQ(*path_count, 2u);
+    EXPECT_NE(mode_data, nullptr);
+    EXPECT_GE(*mode_count, 1u);
+    path_data[0].sourceInfo.id = 17;
+    path_data[1].sourceInfo.id = 29;
+    *mode_count = 0;
+    return ERROR_SUCCESS;
+  })};
+
+  EXPECT_EQ(result, ERROR_SUCCESS);
+  ASSERT_EQ(paths.size(), 2u);
+  EXPECT_EQ(paths[0].sourceInfo.id, 17u);
+  EXPECT_EQ(paths[1].sourceInfo.id, 29u);
+  EXPECT_TRUE(modes.empty());
+}
+
+TEST(WinApiLayerQueryBuffers, NativeQueryFailureIsNotReportedAsAnEmptySuccess) {
+  std::vector<DISPLAYCONFIG_PATH_INFO> paths;
+  std::vector<DISPLAYCONFIG_MODE_INFO> modes;
+  const auto result {display_device::detail::queryDisplayConfigWithBuffers(QDC_ONLY_ACTIVE_PATHS, 0, 0, paths, modes, [](auto, auto *, auto *, auto *, auto *, auto) {
+    return ERROR_ACCESS_DENIED;
+  })};
+
+  EXPECT_EQ(result, ERROR_ACCESS_DENIED);
 }
 
 TEST_F_S(QueryDisplayConfig, PathAndModeCount) {

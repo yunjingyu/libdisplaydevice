@@ -1,3 +1,7 @@
+// system includes
+#include <algorithm>
+#include <functional>
+
 // local includes
 #include "display_device/windows/settings_manager.h"
 #include "display_device/windows/settings_utils.h"
@@ -27,11 +31,6 @@ namespace {
     {"DeviceId3", {{456, 123}, {60, 1}}}
   };
   const std::string CURRENT_MODIFIED_PRIMARY_DEVICE {"DeviceId3"};
-  const display_device::EnumeratedDeviceList CURRENT_DEVICES {
-    {.m_device_id = "DeviceId1"},
-    {.m_device_id = "DeviceId3"},
-    {.m_device_id = "DeviceId4"}
-  };
   const display_device::ActiveTopology FULL_EXTENDED_TOPOLOGY {
     {"DeviceId1"},
     {"DeviceId3"},
@@ -79,14 +78,16 @@ namespace {
         .Times(1)
         .WillOnce(Return(true))
         .RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, ut_consts::SDCS_FULL->m_modified.m_topology))
+      EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, FULL_EXTENDED_TOPOLOGY))
         .Times(1)
         .WillOnce(Return(false))
         .RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, setTopology(ut_consts::SDCS_FULL->m_modified.m_topology))
+      EXPECT_CALL(*m_dd_api, setTopology(FULL_EXTENDED_TOPOLOGY))
         .Times(1)
         .WillOnce(Return(true))
         .RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(FULL_EXTENDED_TOPOLOGY)).RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, isTopologyTheSame(FULL_EXTENDED_TOPOLOGY, FULL_EXTENDED_TOPOLOGY)).WillOnce(Return(true)).RetiresOnSaturation();
     }
 
     void expectedDefaultHdrStateGuardInitCall(InSequence & /* To ensure that sequence is created outside this scope */) const {
@@ -177,19 +178,39 @@ namespace {
         .RetiresOnSaturation();
     }
 
-    void expectedDefaultInitialTopologyCalls(InSequence & /* To ensure that sequence is created outside this scope */, const std::optional<display_device::SingleDisplayConfigState> &state = ut_consts::SDCS_FULL) {
+    void expectedDefaultInitialTopologyCalls(InSequence & /* To ensure that sequence is created outside this scope */, const std::optional<display_device::SingleDisplayConfigState> &state = ut_consts::SDCS_FULL, const bool modified_topology_applied = true) {
       EXPECT_CALL(*m_dd_api, isTopologyValid(state->m_initial.m_topology))
         .Times(1)
         .WillOnce(Return(true))
         .RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, state->m_initial.m_topology))
-        .Times(1)
-        .WillOnce(Return(CURRENT_TOPOLOGY == state->m_initial.m_topology))
-        .RetiresOnSaturation();
+      const auto before {modified_topology_applied ? FULL_EXTENDED_TOPOLOGY : CURRENT_TOPOLOGY};
+      auto staged {state->m_initial.m_topology};
+      auto included {display_device::win_utils::flattenTopology(staged)};
+      for (const auto &group : before) {
+        std::vector<std::string> remaining;
+        for (const auto &device : group) {
+          if (included.insert(device).second) {
+            remaining.push_back(device);
+          }
+        }
+        if (!remaining.empty()) {
+          staged.push_back(remaining);
+        }
+      }
+      const bool already_staged {display_device::win_utils::flattenTopology(before) == display_device::win_utils::flattenTopology(staged)};
+      EXPECT_CALL(*m_dd_api, isTopologyTheSame(before, staged)).WillOnce(Return(already_staged)).RetiresOnSaturation();
+      if (!already_staged) {
+        EXPECT_CALL(*m_dd_api, setTopology(staged)).WillOnce(Return(true)).RetiresOnSaturation();
+        EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(staged)).RetiresOnSaturation();
+        EXPECT_CALL(*m_dd_api, isTopologyTheSame(staged, staged)).WillOnce(Return(true)).RetiresOnSaturation();
+      }
+      EXPECT_CALL(*m_dd_api, isTopologyTheSame(staged, state->m_initial.m_topology)).WillOnce(Return(false)).RetiresOnSaturation();
       EXPECT_CALL(*m_dd_api, setTopology(state->m_initial.m_topology))
         .Times(1)
         .WillOnce(Return(true))
         .RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(state->m_initial.m_topology)).RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, isTopologyTheSame(state->m_initial.m_topology, state->m_initial.m_topology)).WillOnce(Return(true)).RetiresOnSaturation();
     }
 
     void expectedDefaultFinalPersistenceCalls(InSequence & /* To ensure that sequence is created outside this scope */) {
@@ -213,44 +234,11 @@ namespace {
     }
 
     void expectedDefaultTopologyGuardCall(InSequence & /* To ensure that sequence is created outside this scope */) {
-      EXPECT_CALL(*m_dd_api, enumAvailableDevices())
-        .Times(1)
-        .WillOnce(Return(CURRENT_DEVICES))
-        .RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, isTopologyValid(FULL_EXTENDED_TOPOLOGY))
-        .Times(1)
-        .WillOnce(Return(true))
-        .RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, FULL_EXTENDED_TOPOLOGY))
-        .Times(1)
-        .WillOnce(Return(false))
-        .RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, setTopology(FULL_EXTENDED_TOPOLOGY))
-        .Times(1)
-        .WillOnce(Return(true))
-        .RetiresOnSaturation();
-    }
-
-    void expectedFallbackTopologyEvaluationCalls(InSequence & /* To ensure that sequence is created outside this scope */, const bool full_topology_valid, const display_device::ActiveTopology &comparison_topology, const bool is_same) const {
-      EXPECT_CALL(*m_dd_api, enumAvailableDevices())
-        .Times(1)
-        .WillOnce(Return(CURRENT_DEVICES))
-        .RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, isTopologyValid(FULL_EXTENDED_TOPOLOGY))
-        .Times(1)
-        .WillOnce(Return(full_topology_valid))
-        .RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, comparison_topology))
-        .Times(1)
-        .WillOnce(Return(is_same))
-        .RetiresOnSaturation();
-    }
-
-    void expectedFallbackSetTopologyCall(InSequence & /* To ensure that sequence is created outside this scope */, const bool success) {
-      EXPECT_CALL(*m_dd_api, setTopology(FULL_EXTENDED_TOPOLOGY))
-        .Times(1)
-        .WillOnce(Return(success))
-        .RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(FULL_EXTENDED_TOPOLOGY)).RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, isTopologyTheSame(FULL_EXTENDED_TOPOLOGY, CURRENT_TOPOLOGY)).WillOnce(Return(false)).RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, setTopology(CURRENT_TOPOLOGY)).WillOnce(Return(true)).RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(CURRENT_TOPOLOGY)).RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, CURRENT_TOPOLOGY)).WillOnce(Return(true)).RetiresOnSaturation();
     }
 
     void expectedHdrWorkaroundCalls(InSequence & /* To ensure that sequence is created outside this scope */) const {
@@ -334,12 +322,14 @@ TEST_F_S_MOCKED(RevertModifiedSettings, FailedToSetModifiedTopology) {
   EXPECT_CALL(*m_dd_api, isTopologyValid(ut_consts::SDCS_FULL->m_modified.m_topology))
     .Times(1)
     .WillOnce(Return(true));
-  EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, ut_consts::SDCS_FULL->m_modified.m_topology))
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, FULL_EXTENDED_TOPOLOGY))
     .Times(1)
     .WillOnce(Return(false));
-  EXPECT_CALL(*m_dd_api, setTopology(ut_consts::SDCS_FULL->m_modified.m_topology))
+  EXPECT_CALL(*m_dd_api, setTopology(FULL_EXTENDED_TOPOLOGY))
     .Times(1)
     .WillOnce(Return(false));
+  EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(CURRENT_TOPOLOGY)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, FULL_EXTENDED_TOPOLOGY)).WillOnce(Return(false)).RetiresOnSaturation();
   expectedDefaultTopologyGuardCall(sequence);
   expectedHdrWorkaroundCalls(sequence);
 
@@ -465,7 +455,8 @@ TEST_F_S_MOCKED(TopologyGuard, CurrentTopologyUsedAsFallback) {
     .Times(1)
     .WillOnce(Return(false))
     .RetiresOnSaturation();
-  expectedFallbackTopologyEvaluationCalls(sequence, false, CURRENT_TOPOLOGY, true);
+  EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(CURRENT_TOPOLOGY)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, CURRENT_TOPOLOGY)).WillOnce(Return(true)).RetiresOnSaturation();
   expectedHdrWorkaroundCalls(sequence);
 
   EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::TopologyIsInvalid);
@@ -478,7 +469,8 @@ TEST_F_S_MOCKED(TopologyGuard, SystemSettingsUntouched) {
     .Times(1)
     .WillOnce(Return(false))
     .RetiresOnSaturation();
-  expectedFallbackTopologyEvaluationCalls(sequence, false, CURRENT_TOPOLOGY, true);
+  EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(CURRENT_TOPOLOGY)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, CURRENT_TOPOLOGY)).WillOnce(Return(true)).RetiresOnSaturation();
 
   EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::TopologyIsInvalid);
 }
@@ -490,8 +482,12 @@ TEST_F_S_MOCKED(TopologyGuard, FailedToSetTopology) {
     .Times(1)
     .WillOnce(Return(false))
     .RetiresOnSaturation();
-  expectedFallbackTopologyEvaluationCalls(sequence, true, FULL_EXTENDED_TOPOLOGY, false);
-  expectedFallbackSetTopologyCall(sequence, false);
+  EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(FULL_EXTENDED_TOPOLOGY)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(FULL_EXTENDED_TOPOLOGY, CURRENT_TOPOLOGY)).WillOnce(Return(false)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, setTopology(CURRENT_TOPOLOGY)).WillOnce(Return(false)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(FULL_EXTENDED_TOPOLOGY)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(FULL_EXTENDED_TOPOLOGY, CURRENT_TOPOLOGY)).WillOnce(Return(false)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, CURRENT_TOPOLOGY)).WillOnce(Return(true)).RetiresOnSaturation();
   expectedHdrWorkaroundCalls(sequence);
 
   EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::TopologyIsInvalid);
@@ -520,16 +516,13 @@ TEST_F_S_MOCKED(FailedToSetInitialTopology) {
     .Times(1)
     .WillOnce(Return(true))
     .RetiresOnSaturation();
-  EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, ut_consts::SDCS_FULL->m_initial.m_topology))
-    .Times(1)
-    .WillOnce(Return(false))
-    .RetiresOnSaturation();
-  EXPECT_CALL(*m_dd_api, setTopology(ut_consts::SDCS_FULL->m_initial.m_topology))
-    .Times(1)
-    .WillOnce(Return(false))
-    .RetiresOnSaturation();
-
-  expectedDefaultTopologyGuardCall(sequence);
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(FULL_EXTENDED_TOPOLOGY, FULL_EXTENDED_TOPOLOGY)).WillOnce(Return(true)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(FULL_EXTENDED_TOPOLOGY, ut_consts::SDCS_FULL->m_initial.m_topology)).WillOnce(Return(false)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, setTopology(ut_consts::SDCS_FULL->m_initial.m_topology)).WillOnce(Return(false)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(FULL_EXTENDED_TOPOLOGY)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(FULL_EXTENDED_TOPOLOGY, ut_consts::SDCS_FULL->m_initial.m_topology)).WillOnce(Return(false)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(FULL_EXTENDED_TOPOLOGY)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(FULL_EXTENDED_TOPOLOGY, FULL_EXTENDED_TOPOLOGY)).WillOnce(Return(true)).RetiresOnSaturation();
   expectedHdrWorkaroundCalls(sequence);
 
   EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::SwitchingTopologyFailed);
@@ -545,7 +538,8 @@ TEST_F_S_MOCKED(FailedToClearPersistence) {
     .WillOnce(Return(false))
     .RetiresOnSaturation();
 
-  expectedDefaultTopologyGuardCall(sequence);
+  EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(ut_consts::SDCS_FULL->m_initial.m_topology)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(ut_consts::SDCS_FULL->m_initial.m_topology, ut_consts::SDCS_FULL->m_initial.m_topology)).WillOnce(Return(true)).RetiresOnSaturation();
   expectedHdrWorkaroundCalls(sequence);
 
   EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::PersistenceSaveFailed);
@@ -607,7 +601,7 @@ TEST_F_S_MOCKED(RevertModifiedSettings, CachedSettingsAreUpdated) {
 
   expectedDefaultCallsUntilModifiedSettingsNoPersistence(sequence);
   // No need for expectedDefaultRevertModifiedSettingsCall anymore.
-  expectedDefaultInitialTopologyCalls(sequence);
+  expectedDefaultInitialTopologyCalls(sequence, ut_consts::SDCS_FULL, false);
   expectedDefaultFinalPersistenceCalls(sequence);
   expectedDefaultAudioContextCalls(sequence, false);
   expectedHdrWorkaroundCalls(sequence);
@@ -638,8 +632,284 @@ TEST_F_S_MOCKED(CurrentSettingsMatchPersistentOnes) {
   EXPECT_CALL(*m_settings_persistence_api, store(*serializeState(cleared_modifications))).Times(1).WillOnce(Return(true)).RetiresOnSaturation();
   EXPECT_CALL(*m_dd_api, isTopologyValid(state.m_initial.m_topology)).Times(1).WillOnce(Return(true)).RetiresOnSaturation();
   EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, state.m_initial.m_topology)).Times(1).WillOnce(Return(true)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, state.m_initial.m_topology)).WillOnce(Return(true)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(CURRENT_TOPOLOGY)).RetiresOnSaturation();
+  EXPECT_CALL(*m_dd_api, isTopologyTheSame(CURRENT_TOPOLOGY, state.m_initial.m_topology)).WillOnce(Return(true)).RetiresOnSaturation();
   expectedDefaultFinalPersistenceCalls(sequence);
   expectedDefaultAudioContextCalls(sequence, false);
 
   EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::Ok);
+}
+
+namespace {
+  /** @brief Stateful display API fixture that exposes partial and falsely successful transitions. */
+  class StagedRestore: public BaseTest {
+  public:
+    using Topology = display_device::ActiveTopology;  ///< Active output groups.
+    using Result = display_device::SettingsManager::RevertResult;  ///< Restore outcome.
+
+    /** @brief Construct a manager backed by a persistent recovery record and observable outputs. */
+    void init() {
+      ON_CALL(*api, isApiAccessAvailable()).WillByDefault(Return(true));
+      ON_CALL(*api, isTopologyValid(_)).WillByDefault([](const Topology &topology) {
+        return !topology.empty();
+      });
+      ON_CALL(*api, isTopologyTheSame(_, _)).WillByDefault([](Topology left, Topology right) {
+        for (auto *topology : {&left, &right}) {
+          for (auto &group : *topology) {
+            std::ranges::sort(group);
+          }
+          std::ranges::sort(*topology);
+        }
+        return left == right;
+      });
+      ON_CALL(*api, getCurrentTopology()).WillByDefault([this]() {
+        return active;
+      });
+      ON_CALL(*api, setTopology(_)).WillByDefault([this](const Topology &target) {
+        writes.push_back(target);
+        if (transition) {
+          return transition(target);
+        }
+        active = target;
+        return true;
+      });
+      EXPECT_CALL(*api, enumAvailableDevices()).Times(0);
+      ON_CALL(*persistence, load()).WillByDefault([this]() {
+        return serializeState(state);
+      });
+      ON_CALL(*persistence, clear()).WillByDefault([this]() {
+        ++clear_attempts;
+        if (fail_clear) {
+          return false;
+        }
+        state = std::nullopt;
+        return true;
+      });
+      manager = std::make_unique<display_device::SettingsManager>(api, audio, std::make_unique<display_device::PersistentState>(persistence), display_device::WinWorkarounds {});
+    }
+
+    const Topology original {{"left", "right"}};  ///< Original physical outputs are cloned.
+    const Topology stream {{"stream"}};  ///< Streaming output before recovery.
+    const Topology staged {{"left", "right"}, {"stream"}};  ///< Physical clone and streaming output together.
+    Topology active {stream};  ///< State reported by readback.
+    std::optional<display_device::SingleDisplayConfigState> state {display_device::SingleDisplayConfigState {{original, {"left", "right"}}, {stream}}};  ///< Persistent original and streaming layouts.
+    std::vector<Topology> writes;  ///< Requested topology mutations.
+    std::function<bool(const Topology &)> transition;  ///< Optional fault injection at the actual display API boundary.
+    unsigned int clear_attempts {};  ///< Number of persistence removal attempts.
+    bool fail_clear {};  ///< Simulate storage failure after a verified restore.
+    std::shared_ptr<::testing::NiceMock<display_device::MockWinDisplayDevice>> api {std::make_shared<::testing::NiceMock<display_device::MockWinDisplayDevice>>()};  ///< Stateful API mock.
+    std::shared_ptr<::testing::NiceMock<display_device::MockSettingsPersistence>> persistence {std::make_shared<::testing::NiceMock<display_device::MockSettingsPersistence>>()};  ///< Storage mock.
+    std::shared_ptr<::testing::NiceMock<display_device::MockAudioContext>> audio {std::make_shared<::testing::NiceMock<display_device::MockAudioContext>>()};  ///< Audio mock.
+    std::unique_ptr<display_device::SettingsManager> manager;  ///< Manager under test.
+  };
+}  // namespace
+
+TEST_F(StagedRestore, VerifiesPhysicalCloneBeforeRemovingStream) {
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged, original}));
+  EXPECT_EQ(active, original);
+  EXPECT_FALSE(state);
+  EXPECT_EQ(clear_attempts, 1u);
+}
+
+TEST_F(StagedRestore, StageFailureKeepsCaptureAndRecoveryRecord) {
+  transition = [](const Topology &) {
+    return false;
+  };
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::SwitchingTopologyFailed);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged}));
+  EXPECT_EQ(active, stream);
+  EXPECT_TRUE(state);
+  EXPECT_EQ(clear_attempts, 0u);
+}
+
+TEST_F(StagedRestore, StageReadbackMismatchRestoresCaptureBeforeRetry) {
+  transition = [this](const Topology &target) {
+    active = writes.size() == 1 ? Topology {{"left"}} : target;
+    return true;
+  };
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::SwitchingTopologyFailed);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged, stream}));
+  EXPECT_EQ(active, stream);
+  EXPECT_TRUE(state);
+  EXPECT_EQ(clear_attempts, 0u);
+  transition = {};
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_EQ(active, original);
+  EXPECT_FALSE(state);
+}
+
+TEST_F(StagedRestore, FinalFailureRollsBackToVerifiedStage) {
+  transition = [this](const Topology &target) {
+    if (writes.size() == 2) {
+      active.clear();
+      return false;
+    }
+    active = target;
+    return true;
+  };
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::SwitchingTopologyFailed);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged, original, staged}));
+  EXPECT_EQ(active, staged);
+  EXPECT_TRUE(state);
+  EXPECT_EQ(clear_attempts, 0u);
+}
+
+TEST_F(StagedRestore, FinalReadbackMismatchDoesNotClearRecovery) {
+  transition = [this](const Topology &target) {
+    active = writes.size() == 2 ? stream : target;
+    return true;
+  };
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::SwitchingTopologyFailed);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged, original, staged}));
+  EXPECT_EQ(active, staged);
+  EXPECT_TRUE(state);
+  EXPECT_EQ(clear_attempts, 0u);
+}
+
+TEST_F(StagedRestore, StageRollbackMismatchFallsBackToOriginalCapture) {
+  transition = [this](const Topology &target) {
+    active = writes.size() == 2 || writes.size() == 3 ? Topology {} : target;
+    return true;
+  };
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::SwitchingTopologyFailed);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged, original, staged, stream}));
+  EXPECT_EQ(active, stream);
+  EXPECT_TRUE(state);
+  EXPECT_EQ(clear_attempts, 0u);
+}
+
+TEST_F(StagedRestore, PersistenceFailureKeepsVerifiedPhysicalOutputsAndCanRetry) {
+  fail_clear = true;
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::PersistenceSaveFailed);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged, original}));
+  EXPECT_EQ(active, original);
+  EXPECT_TRUE(state);
+  fail_clear = false;
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_EQ(writes.size(), 2u);
+  EXPECT_FALSE(state);
+  EXPECT_EQ(clear_attempts, 2u);
+}
+
+TEST_F(StagedRestore, AlreadyRestoredTopologyDoesNotCycleDisplays) {
+  active = original;
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_TRUE(writes.empty());
+  EXPECT_EQ(active, original);
+  EXPECT_FALSE(state);
+}
+
+TEST_F(StagedRestore, PreservesAdditionalActiveCaptureAndTargetCloneGroups) {
+  active = {{"stream", "capture"}};
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_EQ(writes.front(), (Topology {{"left", "right"}, {"stream", "capture"}}));
+  EXPECT_EQ(active, original);
+}
+
+TEST_F(StagedRestore, EmptyActiveTopologyRecoversUsingPersistedOutputs) {
+  active.clear();
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged, original}));
+  EXPECT_EQ(active, original);
+  EXPECT_FALSE(state);
+}
+
+TEST_F(StagedRestore, EmptyTopologyStageFailureRecoversCaptureAndRemainsPending) {
+  active.clear();
+  transition = [this](const Topology &target) {
+    if (writes.size() == 1) {
+      return false;
+    }
+    active = target;
+    return true;
+  };
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::SwitchingTopologyFailed);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged, stream}));
+  EXPECT_EQ(active, stream);
+  EXPECT_TRUE(state);
+  EXPECT_EQ(clear_attempts, 0u);
+}
+
+TEST_F(StagedRestore, EmptyTopologyPartialRecoveryKeepsOutputsThatBecameActive) {
+  active.clear();
+  transition = [this](const Topology &) {
+    active = {{"left"}};
+    return true;
+  };
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::SwitchingTopologyFailed);
+  EXPECT_EQ(writes, (std::vector<Topology> {staged}));
+  EXPECT_EQ(active, (Topology {{"left"}}));
+  EXPECT_TRUE(state);
+  EXPECT_EQ(clear_attempts, 0u);
+}
+
+TEST_F(StagedRestore, RevertingModifiedSettingsKeepsCurrentPhysicalOutputs) {
+  active = original;
+  state->m_modified.m_original_hdr_states = {{"stream", display_device::HdrState::Disabled}};
+  init();
+  ON_CALL(*api, getCurrentHdrStates(_)).WillByDefault(Return(display_device::HdrStateMap {{"stream", display_device::HdrState::Enabled}}));
+  ON_CALL(*api, setHdrStates(_)).WillByDefault(Return(true));
+  ON_CALL(*persistence, store(_)).WillByDefault(Return(true));
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_EQ(writes, (std::vector<Topology> {{{"stream"}, {"left", "right"}}, original}));
+  EXPECT_EQ(active, original);
+  EXPECT_FALSE(state);
+}
+
+TEST_F(StagedRestore, ModifiedSettingsStageRequiresPhysicalOutputReadback) {
+  active = original;
+  state->m_modified.m_original_hdr_states = {{"stream", display_device::HdrState::Disabled}};
+  transition = [this](const Topology &target) {
+    active = writes.size() == 1 ? stream : target;
+    return true;
+  };
+  init();
+  EXPECT_CALL(*api, setHdrStates(_)).Times(0);
+  EXPECT_EQ(manager->revertSettings(), Result::SwitchingTopologyFailed);
+  EXPECT_EQ(writes, (std::vector<Topology> {{{"stream"}, {"left", "right"}}, original}));
+  EXPECT_EQ(active, original);
+  EXPECT_TRUE(state);
+  EXPECT_EQ(clear_attempts, 0u);
+}
+
+TEST_F(StagedRestore, PersistenceFailureRestoresPrimaryOutsideModifiedTopology) {
+  active = {{"stream"}, {"left"}, {"preserved-primary"}};
+  state->m_initial = {active, {"preserved-primary"}};
+  state->m_modified.m_topology = {{"stream"}, {"left"}};
+  state->m_modified.m_original_primary_device = "left";
+  std::string primary {"preserved-primary"};
+  std::vector<std::string> primary_writes;
+  init();
+  ON_CALL(*api, isPrimary(_)).WillByDefault([&primary](const std::string &device) {
+    return device == primary;
+  });
+  ON_CALL(*api, setAsPrimary(_)).WillByDefault([&primary, &primary_writes](const std::string &device) {
+    primary_writes.push_back(device);
+    primary = device;
+    return true;
+  });
+  ON_CALL(*persistence, store(_)).WillByDefault(Return(false));
+  EXPECT_CALL(*api, setAsPrimary("")).Times(0);
+  EXPECT_CALL(*api, setAsPrimary("left")).Times(1);
+  EXPECT_CALL(*api, setAsPrimary("preserved-primary")).Times(1);
+  EXPECT_EQ(manager->revertSettings(), Result::PersistenceSaveFailed);
+  EXPECT_EQ(primary_writes, (std::vector<std::string> {"left", "preserved-primary"}));
+  EXPECT_EQ(primary, "preserved-primary");
+  EXPECT_EQ(active, state->m_initial.m_topology);
+  EXPECT_TRUE(writes.empty());
+  EXPECT_EQ(clear_attempts, 0u);
 }

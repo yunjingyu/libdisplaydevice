@@ -142,9 +142,17 @@ namespace display_device {
     }
 
     const auto current_topology {getCurrentTopology()};
-    if (!isTopologyValid(current_topology)) {
-      DD_LOG(error) << "Failed to get current topology!";
-      return false;
+    const bool has_valid_current_topology {isTopologyValid(current_topology)};
+    if (!has_valid_current_topology) {
+      // An empty parsed topology can also mean the API or path metadata failed.
+      // Only reconstruct from inactive paths when a fresh query confirms that
+      // Windows actually reports no active paths, rather than guessing after an error.
+      const auto active_data {current_topology.empty() ? m_w_api->queryDisplayConfig(QueryType::Active) : std::nullopt};
+      if (!active_data || !active_data->m_paths.empty()) {
+        DD_LOG(error) << "Failed to get current topology; an empty active display configuration could not be confirmed.";
+        return false;
+      }
+      DD_LOG(warning) << "Windows reports no active display paths. Attempting recovery using available display paths.";
     }
 
     if (isTopologyTheSame(current_topology, new_topology)) {
@@ -193,9 +201,17 @@ namespace display_device {
         DD_LOG(error) << "Failed to get updated topology!";
       }
 
-      // Revert back to the original topology
-      const UINT32 flags {SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE | SDC_VIRTUAL_MODE_AWARE};
-      static_cast<void>(m_w_api->setDisplayConfig(original_data->m_paths, original_data->m_modes, flags));  // Return value does not matter as we are trying out best to undo
+      const bool original_has_active_paths {std::ranges::any_of(original_data->m_paths, win_utils::isActive)};
+      if (has_valid_current_topology && original_has_active_paths) {
+        // Revert back to the original topology. Never restore a known-empty
+        // snapshot after blackout recovery: it could remove a recovered output.
+        const UINT32 flags {SDC_APPLY | SDC_USE_SUPPLIED_DISPLAY_CONFIG | SDC_SAVE_TO_DATABASE | SDC_VIRTUAL_MODE_AWARE};
+        if (const LONG rollback_result {m_w_api->setDisplayConfig(original_data->m_paths, original_data->m_modes, flags)}; rollback_result != ERROR_SUCCESS) {
+          DD_LOG(error) << m_w_api->getErrorString(rollback_result) << " failed to restore the original display configuration after a topology verification failure!";
+        }
+      } else {
+        DD_LOG(warning) << "Display recovery did not produce the requested topology. Keeping any recovered outputs active instead of restoring a configuration without a verified active topology.";
+      }
     }
 
     return false;

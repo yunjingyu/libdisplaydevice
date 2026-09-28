@@ -8,10 +8,38 @@
 #include "display_device/windows/types.h"
 
 // system includes
+#include <algorithm>
 #include <cstddef>
 #include <cstring>
 
 namespace display_device::detail {
+  /**
+   * @brief Query display paths with non-null output buffers even when the size estimate is zero.
+   * @tparam QueryFn Native QueryDisplayConfig function or a compatible callable.
+   * @param flags Native query flags.
+   * @param path_count Number of path records estimated by GetDisplayConfigBufferSizes.
+   * @param mode_count Number of mode records estimated by GetDisplayConfigBufferSizes.
+   * @param paths Buffer receiving the actual returned path records.
+   * @param modes Buffer receiving the actual returned mode records.
+   * @param query Function that performs the native query.
+   * @return Native query result; a successful empty query leaves both output arrays empty.
+   * @see https://learn.microsoft.com/en-us/windows/win32/api/winuser/nf-winuser-querydisplayconfig
+   */
+  template<class QueryFn>
+  LONG queryDisplayConfigWithBuffers(UINT32 flags, UINT32 path_count, UINT32 mode_count, std::vector<DISPLAYCONFIG_PATH_INFO> &paths, std::vector<DISPLAYCONFIG_MODE_INFO> &modes, QueryFn query) {
+    // Both output pointers are mandatory, including when every display is inactive.
+    path_count = std::max<UINT32>(path_count, 1);
+    mode_count = std::max<UINT32>(mode_count, 1);
+    paths.resize(path_count);
+    modes.resize(mode_count);
+    const LONG result {query(flags, &path_count, paths.data(), &mode_count, modes.data(), nullptr)};
+    if (result == ERROR_SUCCESS) {
+      paths.resize(path_count);
+      modes.resize(mode_count);
+    }
+    return result;
+  }
+
   /**
    * @brief Gets desktop image metadata from a DisplayConfig mode record.
    * @param info Mode record whose union payload contains desktop image metadata.

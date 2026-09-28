@@ -115,11 +115,12 @@ namespace display_device {
      * @param current_topology Topology before this method is called.
      * @param system_settings_touched Indicates whether a "write" operation could have been performed on the OS.
      * @param switched_topology [Optional] Indicates whether the current topology was switched to revert settings.
+     * @param preserve_current_outputs Keep existing outputs active and verify topology changes during final restoration.
      * @returns Result enum indicating success or failure.
      * @warning The method assumes that the caller will ensure restoring the topology
      *          in case of a failure!
      */
-    [[nodiscard]] RevertResult revertModifiedSettings(const ActiveTopology &current_topology, bool &system_settings_touched, bool *switched_topology = nullptr);
+    [[nodiscard]] RevertResult revertModifiedSettings(const ActiveTopology &current_topology, bool &system_settings_touched, bool *switched_topology = nullptr, bool preserve_current_outputs = false);
 
     /**
      * @brief Revert HDR changes tracked in the modified settings state.
@@ -142,11 +143,12 @@ namespace display_device {
     /**
      * @brief Revert primary device changes tracked in the modified settings state.
      * @param modified_state Modified state data to revert.
+     * @param active_topology Active outputs, including any preserved outputs outside the modified state.
      * @param guard_fn Reference to the guard function which will be set to restore the current state if needed.
      * @param system_settings_touched Indicates whether a "write" operation could have been performed on the OS.
      * @returns Result enum indicating success or failure.
      */
-    [[nodiscard]] RevertResult revertModifiedPrimaryDevice(const SingleDisplayConfigState::Modified &modified_state, DdGuardFn &guard_fn, bool &system_settings_touched);
+    [[nodiscard]] RevertResult revertModifiedPrimaryDevice(const SingleDisplayConfigState::Modified &modified_state, const ActiveTopology &active_topology, DdGuardFn &guard_fn, bool &system_settings_touched);
 
   private:
     std::shared_ptr<WinDisplayDeviceInterface> m_dd_api;
