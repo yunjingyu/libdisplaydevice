@@ -14,7 +14,7 @@ namespace display_device {
   MacSettingsManager::RevertResult MacSettingsManager::revertSettings() {
     const auto &cached_state {m_persistence_state->getState()};
     if (!cached_state) {
-      return RevertResult::Ok;
+      return RevertResult::NoChangesToRevert;
     }
 
     if (!m_dd_api->isApiAccessAvailable()) {

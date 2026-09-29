@@ -126,6 +126,51 @@ TEST_F_S_MOCKED(IsApiAccessAvailable, FailedToSetDisplayConfig) {
   EXPECT_FALSE(m_win_dd.isApiAccessAvailable());
 }
 
+TEST_F_S_MOCKED(IsApiAccessAvailable, FailuresAreDiagnosedWithoutDebugLogging) {
+  using Level = display_device::Logger::LogLevel;
+  std::vector<std::pair<Level, std::string>> messages;
+  display_device::Logger::get().setLogLevel(Level::warning);
+  display_device::Logger::get().setCustomCallback([&messages](const Level level, std::string message) {
+    messages.emplace_back(level, std::move(message));
+  });
+
+  for (const auto &[error, description] : std::vector<std::pair<LONG, std::string>> {
+         {ERROR_ACCESS_DENIED, "Access is denied."},
+         {ERROR_INVALID_PARAMETER, "The parameter is incorrect."},
+         {ERROR_BAD_CONFIGURATION, "The configuration data is invalid."}
+       }) {
+    SCOPED_TRACE(error);
+    messages.clear();
+    EXPECT_CALL(*m_layer, setDisplayConfig(std::vector<DISPLAYCONFIG_PATH_INFO> {}, std::vector<DISPLAYCONFIG_MODE_INFO> {}, FLAGS))
+      .Times(1)
+      .WillOnce(Return(error))
+      .RetiresOnSaturation();
+    EXPECT_CALL(*m_layer, getErrorString(error))
+      .Times(1)
+      .WillOnce(Return(description))
+      .RetiresOnSaturation();
+
+    EXPECT_FALSE(m_win_dd.isApiAccessAvailable());
+    ASSERT_EQ(messages.size(), 1);
+    EXPECT_EQ(messages.front().first, Level::warning);
+    EXPECT_THAT(messages.front().second, HasSubstr("SetDisplayConfig(SDC_VALIDATE | SDC_USE_DATABASE_CURRENT)"));
+    EXPECT_THAT(messages.front().second, HasSubstr(std::format("error_code={}: {}", error, description)));
+  }
+}
+
+TEST_F_S_MOCKED(IsApiAccessAvailable, SuccessfulValidationDoesNotWarn) {
+  using Level = display_device::Logger::LogLevel;
+  display_device::Logger::get().setLogLevel(Level::warning);
+  display_device::Logger::get().setCustomCallback([](const Level, std::string message) {
+    ADD_FAILURE() << "Unexpected warning: " << message;
+  });
+  EXPECT_CALL(*m_layer, setDisplayConfig(std::vector<DISPLAYCONFIG_PATH_INFO> {}, std::vector<DISPLAYCONFIG_MODE_INFO> {}, FLAGS))
+    .Times(1)
+    .WillOnce(Return(ERROR_SUCCESS));
+
+  EXPECT_TRUE(m_win_dd.isApiAccessAvailable());
+}
+
 TEST_F_S(EnumAvailableDevices) {
   // Note: we can't verify live data precisely, so just basic check
   // is performed regarding active vs. inactive devices

@@ -269,7 +269,21 @@ TEST_F_S_MOCKED(NoSettingsAvailable) {
     .Times(1)
     .WillOnce(Return(serializeState(ut_consts::SDCS_EMPTY)));
 
-  EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::Ok);
+  EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::NoChangesToRevert);
+  EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::NoChangesToRevert);
+}
+
+TEST_F_S_MOCKED(ApplyUnavailableLeavesNoChangesToRevert) {
+  InSequence sequence;
+  EXPECT_CALL(*m_settings_persistence_api, load())
+    .Times(1)
+    .WillOnce(Return(serializeState(ut_consts::SDCS_EMPTY)));
+  EXPECT_CALL(*m_dd_api, isApiAccessAvailable())
+    .Times(1)
+    .WillOnce(Return(false));
+
+  EXPECT_EQ(getImpl().applySettings({.m_device_id = "DeviceId4"}), display_device::SettingsManager::ApplyResult::ApiTemporarilyUnavailable);
+  EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::NoChangesToRevert);
 }
 
 TEST_F_S_MOCKED(NoApiAccess) {
@@ -555,7 +569,7 @@ TEST_F_S_MOCKED(SuccesfullyReverted, WithAudioCapture) {
   expectedHdrWorkaroundCalls(sequence);
 
   EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::Ok);
-  EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::Ok);  // Second call after success is NOOP
+  EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::NoChangesToRevert);
 }
 
 TEST_F_S_MOCKED(SuccesfullyReverted, NoAudioCapture) {
@@ -568,7 +582,7 @@ TEST_F_S_MOCKED(SuccesfullyReverted, NoAudioCapture) {
   expectedHdrWorkaroundCalls(sequence);
 
   EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::Ok);
-  EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::Ok);  // Second call after success is NOOP
+  EXPECT_EQ(getImpl().revertSettings(), display_device::SettingsManager::RevertResult::NoChangesToRevert);
 }
 
 TEST_F_S_MOCKED(SuccesfullyReverted, TopologySetToBackToInitialSinceItWasChangedToModified) {

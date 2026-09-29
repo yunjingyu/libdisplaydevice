@@ -214,7 +214,8 @@ namespace display_device {
      * RetryScheduler<SettingsManagerInterface> scheduler{std::move(iface)};
      *
      * scheduler.schedule([](SettingsManagerInterface& iface, SchedulerStopToken& stop_token){
-     *   if (iface.revertSettings()) {
+     *   const auto result = iface.revertSettings();
+     *   if (result == SettingsManagerInterface::RevertResult::Ok || result == SettingsManagerInterface::RevertResult::NoChangesToRevert) {
      *     stop_token.requestStop();
      *   }
      * }, { .m_sleep_durations = { 50ms, 10ms });
@@ -336,7 +337,8 @@ namespace display_device {
      *
      * // With stop token:
      * scheduler.schedule([](SettingsManagerInterface& iface, SchedulerStopToken& stop_token) {
-     *   if (iface.revertSettings()) {
+     *   const auto result = iface.revertSettings();
+     *   if (result == SettingsManagerInterface::RevertResult::Ok || result == SettingsManagerInterface::RevertResult::NoChangesToRevert) {
      *     stop_token.requestStop();
      *   }
      * });

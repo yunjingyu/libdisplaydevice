@@ -23,7 +23,9 @@ namespace display_device {
 
     /**
      * @brief Check if the API for changing display settings is accessible.
-     * @returns True if display settings can be changed, false otherwise.
+     * @returns True if validation of the Windows current database configuration succeeds, false otherwise.
+     * @note A failed validation can indicate an access or configuration error. The original Windows
+     *       error code and description are logged at warning level; this check does not change display settings.
      * @examples
      * const WinDisplayDeviceInterface* iface = getIface(...);
      * const bool have_access { iface->isApiAccessAvailable() };

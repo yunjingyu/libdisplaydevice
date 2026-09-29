@@ -38,6 +38,7 @@ namespace display_device {
       RevertingDisplayModesFailed,  ///< Reverting display modes failed
       RevertingHdrStatesFailed,  ///< Reverting HDR states failed
       PersistenceSaveFailed,  ///< Persistence save failed
+      NoChangesToRevert,  ///< No saved settings existed; no restoration was performed and no retry is needed
     };
 
     /**
@@ -84,7 +85,9 @@ namespace display_device {
 
     /**
      * @brief Revert the applied configuration and restore the previous settings.
-     * @returns True if settings were reverted or there was nothing to revert, false otherwise.
+     * @returns Ok if saved settings were reverted, or NoChangesToRevert if no saved settings existed.
+     *          Both are terminal successful outcomes; only Ok reports a completed restoration.
+     *          Other results indicate that reverting failed.
      * @examples
      * SettingsManagerInterface* iface = getIface(...);
      * const auto result = iface->revertSettings();
@@ -104,7 +107,8 @@ namespace display_device {
      * auto result = iface->applySettings(config);
      * if (result == ApplyResult::Ok) {
      *   // Wait for some time
-     *   if (iface->revertSettings() != RevertResult::Ok) {
+     *   const auto revert_result = iface->revertSettings();
+     *   if (revert_result != RevertResult::Ok && revert_result != RevertResult::NoChangesToRevert) {
      *     // Wait for user input
      *     const bool user_wants_reset { true };
      *     if (user_wants_reset) {

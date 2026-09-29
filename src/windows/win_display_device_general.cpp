@@ -21,13 +21,19 @@ namespace display_device {
   }
 
   bool WinDisplayDevice::isApiAccessAvailable() const {
-    // Unless something is really broken on Windows, this call should never fail under normal circumstances - the configuration is 100% correct, since it was
-    // provided by Windows.
+    // Validate the configuration stored by Windows without applying it. A failed
+    // validation does not by itself distinguish access problems from invalid configuration.
     const UINT32 flags {SDC_VALIDATE | SDC_USE_DATABASE_CURRENT};
     const LONG result {m_w_api->setDisplayConfig({}, {}, flags)};
 
+    if (result != ERROR_SUCCESS) {
+      DD_LOG(warning) << "Display API validation failed: SetDisplayConfig(SDC_VALIDATE | SDC_USE_DATABASE_CURRENT), error_code="
+                      << result << ": " << m_w_api->getErrorString(result);
+      return false;
+    }
+
     DD_LOG(debug) << "WinDisplayDevice::isApiAccessAvailable result: " << m_w_api->getErrorString(result);
-    return result == ERROR_SUCCESS;
+    return true;
   }
 
   EnumeratedDeviceList WinDisplayDevice::enumAvailableDevices() const {

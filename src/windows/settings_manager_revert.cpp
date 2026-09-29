@@ -66,7 +66,7 @@ namespace display_device {
   SettingsManager::RevertResult SettingsManager::revertSettings() {
     const auto &cached_state {m_persistence_state->getState()};
     if (!cached_state) {
-      return RevertResult::Ok;
+      return RevertResult::NoChangesToRevert;
     }
 
     const auto api_access {m_dd_api->isApiAccessAvailable()};

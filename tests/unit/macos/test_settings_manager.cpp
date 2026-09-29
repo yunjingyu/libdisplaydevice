@@ -386,7 +386,8 @@ TEST_F_S(ApplySettings, PersistenceFailureRollsBackModes) {
 TEST_F_S(RevertSettings, NoPersistence) {
   expectNoStateLoad();
 
-  EXPECT_EQ(getImpl().revertSettings(), display_device::MacSettingsManager::RevertResult::Ok);
+  EXPECT_EQ(getImpl().revertSettings(), display_device::MacSettingsManager::RevertResult::NoChangesToRevert);
+  EXPECT_EQ(getImpl().revertSettings(), display_device::MacSettingsManager::RevertResult::NoChangesToRevert);
 }
 
 TEST_F_S(RevertSettings, ApiTemporarilyUnavailable) {
@@ -412,6 +413,7 @@ TEST_F_S(RevertSettings, ModeOnly) {
     .WillOnce(Return(false));
 
   EXPECT_EQ(getImpl().revertSettings(), display_device::MacSettingsManager::RevertResult::Ok);
+  EXPECT_EQ(getImpl().revertSettings(), display_device::MacSettingsManager::RevertResult::NoChangesToRevert);
 }
 
 TEST_F_S(RevertSettings, PersistenceFailureRollsBackModes) {
