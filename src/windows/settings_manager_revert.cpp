@@ -45,6 +45,30 @@ namespace display_device {
     }
 
     /**
+     * @brief Keep outputs activated outside the saved streaming transaction during restoration.
+     * @param initial Saved pre-stream layout.
+     * @param modified Outputs managed by the saved streaming layout.
+     * @param current Active outputs observed before restoration starts.
+     * @return Saved layout plus active outputs absent from the streaming layout.
+     */
+    ActiveTopology preserveExternallyActivatedOutputs(ActiveTopology initial, const ActiveTopology &modified, const ActiveTopology &current) {
+      const auto managed {win_utils::flattenTopology(modified)};
+      ActiveTopology external;
+      for (const auto &group : current) {
+        std::vector<std::string> devices;
+        for (const auto &device : group) {
+          if (!managed.contains(device)) {
+            devices.push_back(device);
+          }
+        }
+        if (!devices.empty()) {
+          external.push_back(std::move(devices));
+        }
+      }
+      return preserveCurrentOutputs(std::move(initial), external);
+    }
+
+    /**
      * @brief Apply a topology and verify the active paths before removing any safety output.
      * @param api Display API used to apply and read back the topology.
      * @param topology Requested topology.
@@ -139,7 +163,12 @@ namespace display_device {
 
     const auto before_restore {switched_to_modified_topology ? preserveCurrentOutputs(cached_state->m_modified.m_topology, current_topology) : current_topology};
     safe_topology = before_restore;
-    const auto &initial_topology {cached_state->m_initial.m_topology};
+    // A stale record may contain only the virtual output. Do not disable physical
+    // displays the user has recovered since that transaction was recorded.
+    const auto initial_topology {preserveExternallyActivatedOutputs(cached_state->m_initial.m_topology, cached_state->m_modified.m_topology, current_topology)};
+    if (initial_topology != cached_state->m_initial.m_topology) {
+      DD_LOG(info) << "Preserving outputs activated outside the saved display transaction during restoration.";
+    }
     const auto staged_topology {preserveCurrentOutputs(initial_topology, before_restore)};
     if (!m_dd_api->isTopologyTheSame(before_restore, staged_topology)) {
       system_settings_touched = true;

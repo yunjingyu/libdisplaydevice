@@ -184,7 +184,11 @@ namespace {
         .WillOnce(Return(true))
         .RetiresOnSaturation();
       const auto before {modified_topology_applied ? FULL_EXTENDED_TOPOLOGY : CURRENT_TOPOLOGY};
-      auto staged {state->m_initial.m_topology};
+      auto restored {state->m_initial.m_topology};
+      if (!display_device::win_utils::flattenTopology(restored).contains("DeviceId4") && !display_device::win_utils::flattenTopology(state->m_modified.m_topology).contains("DeviceId4")) {
+        restored.push_back({"DeviceId4"});
+      }
+      auto staged {restored};
       auto included {display_device::win_utils::flattenTopology(staged)};
       for (const auto &group : before) {
         std::vector<std::string> remaining;
@@ -204,13 +208,16 @@ namespace {
         EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(staged)).RetiresOnSaturation();
         EXPECT_CALL(*m_dd_api, isTopologyTheSame(staged, staged)).WillOnce(Return(true)).RetiresOnSaturation();
       }
-      EXPECT_CALL(*m_dd_api, isTopologyTheSame(staged, state->m_initial.m_topology)).WillOnce(Return(false)).RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, setTopology(state->m_initial.m_topology))
-        .Times(1)
-        .WillOnce(Return(true))
-        .RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(state->m_initial.m_topology)).RetiresOnSaturation();
-      EXPECT_CALL(*m_dd_api, isTopologyTheSame(state->m_initial.m_topology, state->m_initial.m_topology)).WillOnce(Return(true)).RetiresOnSaturation();
+      const bool already_restored {staged == restored};
+      EXPECT_CALL(*m_dd_api, isTopologyTheSame(staged, restored)).WillOnce(Return(already_restored)).RetiresOnSaturation();
+      if (!already_restored) {
+        EXPECT_CALL(*m_dd_api, setTopology(restored))
+          .Times(1)
+          .WillOnce(Return(true))
+          .RetiresOnSaturation();
+      }
+      EXPECT_CALL(*m_dd_api, getCurrentTopology()).WillOnce(Return(restored)).RetiresOnSaturation();
+      EXPECT_CALL(*m_dd_api, isTopologyTheSame(restored, restored)).WillOnce(Return(true)).RetiresOnSaturation();
     }
 
     void expectedDefaultFinalPersistenceCalls(InSequence & /* To ensure that sequence is created outside this scope */) {
@@ -828,7 +835,39 @@ TEST_F(StagedRestore, PreservesAdditionalActiveCaptureAndTargetCloneGroups) {
   init();
   EXPECT_EQ(manager->revertSettings(), Result::Ok);
   EXPECT_EQ(writes.front(), (Topology {{"left", "right"}, {"stream", "capture"}}));
-  EXPECT_EQ(active, original);
+  EXPECT_EQ(active, (Topology {{"left", "right"}, {"capture"}}));
+}
+
+TEST_F(StagedRestore, StaleVirtualOnlyRecordKeepsRecoveredPhysicalOutputs) {
+  active = {{"left", "right"}, {"stream"}};
+  state->m_initial = {stream, {"stream"}};
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_EQ(active, (Topology {{"left", "right"}, {"stream"}}));
+  for (const auto &write : writes) {
+    const auto devices {display_device::win_utils::flattenTopology(write)};
+    EXPECT_TRUE(devices.contains("left"));
+    EXPECT_TRUE(devices.contains("right"));
+  }
+  EXPECT_FALSE(state);
+}
+
+TEST_F(StagedRestore, NewPhysicalOutputSurvivesOrdinaryRestoreButStreamingOutputDoesNot) {
+  active = {{"stream"}, {"new-physical"}};
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_EQ(active, (Topology {{"left", "right"}, {"new-physical"}}));
+  EXPECT_FALSE(display_device::win_utils::flattenTopology(active).contains("stream"));
+  EXPECT_FALSE(state);
+}
+
+TEST_F(StagedRestore, VirtualOnlyRecordDoesNotInventInactivePhysicalOutputs) {
+  state->m_initial = {stream, {"stream"}};
+  init();
+  EXPECT_EQ(manager->revertSettings(), Result::Ok);
+  EXPECT_EQ(active, stream);
+  EXPECT_TRUE(writes.empty());
+  EXPECT_FALSE(state);
 }
 
 TEST_F(StagedRestore, EmptyActiveTopologyRecoversUsingPersistedOutputs) {
